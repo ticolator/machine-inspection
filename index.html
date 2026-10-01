@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<!--
+=====================================================================
+  MACHINE INSPECTION SYSTEM  –  on-site inspection (single file, no server)
+=====================================================================
+  HOW IT WORKS
+  - Open this file in any browser (PC or phone). No install, no cost.
+  - Left menu: Department -> Machine -> list of parts to check.
+  - Every part is GREEN (OK) by default; tap the switch to turn it RED.
+  - Add photos and a short description per part.
+  - "Finish & save" stores the inspection in the History, builds a PDF
+    report (with photos) and opens the phone/PC share menu so it can be
+    sent by Gmail/Outlook.
+  - History: search past inspections by machine, date range, problems
+    or text; reopen any record and re-create its PDF.
+  - Data is stored in the browser of that device (IndexedDB). Use
+    History -> "Export backup" regularly; "Import backup" restores or
+    merges records on another device.
+
+  HOW TO EDIT (for whoever maintains this):
+  - Everything you normally need to change is in the "CONFIG" section
+    of the <script> below:
+      * PARTS_JET ........ checklist of parts (Spanish + Korean names)
+      * CONFIG.departments  departments and their machines
+      * CONFIG.emailTo ..... default recipient(s) for the fallback email
+  - To add a machine: copy a machine block { id, name, type, parts }
+    and give it a unique id.
+  - To add a language: add a key in I18N and in every name {es, ko}.
+
+  FREE HOSTING (so phones can open it by URL):
+  - GitHub Pages: upload this file as index.html to a public repository
+    and enable Settings -> Pages.
+  - No external libraries: once the page is open it works offline,
+    including PDF generation.
+=====================================================================
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Machine Inspection System</title>
+<style>
+  :root{
+    --navy:#1f3a5f; --navy-2:#2b4c76; --bg:#f2f4f7; --card:#fff; --ink:#1b2430;
+    --muted:#667085; --line:#e3e7ee; --ok:#1e9e5a; --ok-bg:#e8f6ee;
+    --bad:#d93636; --bad-bg:#fdecec; --accent:#2f6fd6; --radius:12px;
+    --font: system-ui,-apple-system,"Segoe UI",Roboto,"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-tap-highlight-color:transparent}
+  button,input,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+
+  /* ---------- Top bar ---------- */
+  .topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
+    min-height:56px;padding:0 12px;padding-top:env(safe-area-inset-top);box-sizing:content-box;background:var(--navy);color:#fff}
+  .topbar h1{font-size:17px;font-weight:650;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .icon-btn{background:none;border:0;color:#fff;width:40px;height:40px;border-radius:8px;display:grid;place-items:center}
+  .icon-btn:hover{background:rgba(255,255,255,.12)}
+  .lang{display:flex;background:rgba(255,255,255,.12);border-radius:999px;padding:3px}
+  .lang button{border:0;background:none;color:#fff;padding:5px 11px;border-radius:999px;font-size:13px;font-weight:600}
+  .lang button.on{background:#fff;color:var(--navy)}
+
+  /* ---------- Layout ---------- */
+  .layout{display:flex;min-height:calc(100% - 56px)}
+  #sidebar{width:270px;flex:0 0 270px;background:var(--card);border-right:1px solid var(--line);
+    padding:14px 10px;position:sticky;top:56px;height:calc(100vh - 56px);overflow:auto}
+  #main{flex:1;min-width:0;padding:18px 18px 110px;max-width:900px}
+  #scrim{display:none}
+  .side-title{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:4px 8px 8px}
+  .dept-btn{width:100%;display:flex;align-items:center;gap:8px;border:0;background:none;padding:11px 10px;
+    border-radius:10px;font-weight:650;text-align:left}
+  .dept-btn:hover{background:var(--bg)}
+  .dept-btn.on{background:#e9eff8;color:var(--navy)}
+  .dept-btn .chev{margin-left:auto;transition:transform .15s;color:var(--muted)}
+  .dept-btn.open .chev{transform:rotate(90deg)}
+  .mach-list{list-style:none;margin:2px 0 8px;padding:0 0 0 14px}
+  .mach-btn{width:100%;display:flex;align-items:center;gap:8px;border:0;background:none;padding:9px 10px;
+    border-radius:8px;text-align:left;border-left:3px solid transparent}
+  .mach-btn:hover{background:var(--bg)}
+  .mach-btn.on{background:#eef3fb;border-left-color:var(--accent);font-weight:650}
+  .empty{color:var(--muted);font-style:italic;font-size:14px;padding:6px 10px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex:0 0 9px}
+  .dot.bad{background:var(--bad)}
+  .badge{margin-left:auto;background:var(--bad);color:#fff;font-size:12px;font-weight:700;border-radius:999px;padding:1px 7px}
+
+  /* ---------- Cards / headings ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .mhead{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 16px;margin-bottom:14px}
+  .mhead h2{margin:0;font-size:26px}
+  .mhead .sub{color:var(--muted);font-size:14px}
+  .chips{display:flex;gap:8px;margin-left:auto}
+  .chip{font-size:13px;font-weight:700;border-radius:999px;padding:5px 11px}
+  .chip.ok{background:var(--ok-bg);color:var(--ok)}
+  .chip.bad{background:var(--bad-bg);color:var(--bad)}
+  .meta{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+  label.fld{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+  input.txt,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff;font-size:16px}
+  input.txt:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+  input.txt.need{border-color:var(--bad);background:var(--bad-bg)}
+  .ro{padding:10px 0;font-size:16px}
+  h3.sec{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:22px 2px 10px}
+
+  /* ---------- Part rows ---------- */
+  .parts{display:flex;flex-direction:column;gap:10px}
+  .part{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:var(--radius);padding:12px 12px 12px 14px;transition:border-color .15s,background .15s}
+  .part.bad{border-left-color:var(--bad);background:#fffafa;border-color:#f3c9c9}
+  .prow{display:flex;align-items:center;gap:12px}
+  .num{width:26px;height:26px;border-radius:50%;background:var(--bg);color:var(--muted);font-size:13px;font-weight:700;display:grid;place-items:center;flex:0 0 26px}
+  .pname{flex:1;font-weight:600;line-height:1.25}
+  .pname small{display:block;font-weight:400;color:var(--muted);font-size:13px;margin-top:2px}
+  .pinfo{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;margin-top:3px}
+
+  /* toggle switch */
+  .toggle{position:relative;flex:0 0 auto;width:118px;height:40px;border-radius:999px;border:0;background:var(--ok);
+    color:#fff;font-weight:750;font-size:14px;padding:0 14px 0 44px;text-align:left;transition:background .15s}
+  .toggle .knob{position:absolute;top:4px;left:4px;width:32px;height:32px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .18s;display:grid;place-items:center;color:var(--ok)}
+  .toggle[aria-checked="true"]{background:var(--bad);padding:0 44px 0 14px}
+  .toggle[aria-checked="true"] .knob{left:calc(100% - 36px);color:var(--bad)}
+  .toggle:focus-visible{outline:3px solid #9cc0ff;outline-offset:2px}
+
+  .details{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+  .details textarea{min-height:64px;resize:vertical}
+  .part.bad .details textarea:placeholder-shown{border-color:#f0b4b4}
+  .photos{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .thumb{position:relative;width:84px;height:84px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#ddd}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;cursor:zoom-in}
+  .thumb .rm{position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:15px;line-height:24px;padding:0}
+  .add-photo{width:84px;height:84px;border-radius:10px;border:2px dashed #b8c2d1;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;background:#fafbfc}
+  .add-photo:hover{border-color:var(--accent);color:var(--accent)}
+  .add-photo input{display:none}
+  .link-btn{border:0;background:none;color:var(--accent);font-weight:600;font-size:14px;padding:8px 0 0}
+
+  /* ---------- Bottom action bar ---------- */
+  .actions{position:fixed;bottom:0;right:0;left:270px;z-index:20;display:flex;gap:10px;justify-content:flex-end;
+    padding:12px 18px;padding-bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(255,255,255,.95);
+    border-top:1px solid var(--line);backdrop-filter:blur(6px)}
+  .btn{border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:15px;display:inline-flex;align-items:center;gap:8px;justify-content:center}
+  .btn.primary{background:var(--navy);color:#fff}
+  .btn.primary:hover{background:var(--navy-2)}
+  .btn.ghost{background:var(--bg);color:var(--ink)}
+  .btn.danger{background:var(--bad);color:#fff}
+  .btn:disabled{opacity:.6;cursor:progress}
+
+  /* ---------- Welcome / dept cards ---------- */
+  .welcome{color:var(--muted);margin:6px 2px 18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+  .tile{text-align:left;border:1px solid var(--line);background:var(--card);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:6px}
+  .tile:hover{border-color:var(--accent)}
+  .tile b{font-size:18px}
+  .tile span{color:var(--muted);font-size:14px}
+
+  /* ---------- Modal / toast / viewer ---------- */
+  .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:50;display:grid;place-items:center;padding:16px}
+  .modal{background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px}
+  .modal h4{margin:0 0 8px;font-size:18px}
+  .modal p{margin:0 0 16px;color:var(--muted);line-height:1.45}
+  .modal .row{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+  .viewer{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:60;display:grid;place-items:center;padding:12px}
+  .viewer img{max-width:100%;max-height:100%;border-radius:6px}
+  #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%) translateY(20px);background:#1b2430;color:#fff;
+    padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:.2s;z-index:70;max-width:90vw}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---------- History ---------- */
+  .side-sep{height:1px;background:var(--line);margin:10px 4px}
+  .filters{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px}
+  .filters .wide{grid-column:1/-1}
+  .frow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+  .chk{display:flex;align-items:center;gap:8px;font-weight:600}
+  .chk input{width:20px;height:20px}
+  .ranges{display:flex;gap:6px}
+  .pill{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600}
+  .pill:hover{border-color:var(--accent);color:var(--accent)}
+  select.txt{width:100%;border:1px solid var(--line);border-radius:10px;padding:0 10px;background:#fff;font-size:16px}
+  select.txt,input[type=date].txt{height:44px;min-width:0;max-width:100%}
+  .filters > div{min-width:0}
+  .hsum{color:var(--muted);font-size:14px;margin:0 2px 8px}
+  .hrow{width:100%;display:flex;gap:12px;align-items:center;text-align:left;background:var(--card);border:1px solid var(--line);
+    border-left:5px solid var(--ok);border-radius:var(--radius);padding:12px;margin-bottom:8px}
+  .hrow:hover{border-color:var(--accent);border-left-color:var(--ok)}
+  .hrow.bad,.hrow.bad:hover{border-left-color:var(--bad)}
+  .hdate{flex:0 0 auto;display:flex;flex-direction:column;font-size:14px}
+  .hdate span{color:var(--muted);font-size:12px}
+  .hbody{flex:1;min-width:0}
+  .hprob{font-size:13px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hrow.bad .hprob{color:var(--bad)}
+  .rnote{white-space:pre-wrap;line-height:1.45}
+  .pstat{font-weight:750;font-size:13px;color:#fff;border-radius:999px;padding:7px 14px;flex:0 0 auto}
+  .pstat.ok{background:var(--ok)} .pstat.bad{background:var(--bad)}
+  .backup{margin-top:22px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .backup p{flex:1 1 240px;margin:0;color:var(--muted);font-size:13px;line-height:1.4}
+
+  /* ---------- Mobile ---------- */
+  @media (max-width:860px){
+    #sidebar{position:fixed;left:0;top:0;height:100%;z-index:40;transform:translateX(-105%);transition:transform .2s;
+      padding-top:calc(14px + env(safe-area-inset-top));box-shadow:4px 0 24px rgba(0,0,0,.15)}
+    body.menu-open #sidebar{transform:none}
+    body.menu-open #scrim{display:block;position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:35}
+    #main{padding:14px 12px 110px}
+    .actions{left:0;padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+    .actions .btn{flex:1;padding:13px 10px}
+    .meta{grid-template-columns:1fr}
+    .mhead h2{font-size:22px}
+    .chips{margin-left:0}
+    .toggle{width:108px}
+    .filters{grid-template-columns:1fr 1fr}
+    .filters > div:first-child{grid-column:1/-1}
+  }
+  @media (min-width:861px){ #menuBtn{display:none} }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <button id="menuBtn" class="icon-btn" aria-label="Menu">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
+  <h1 id="appTitle"></h1>
+  <div class="lang" role="group" aria-label="Language">
+    <button data-lang="es">ES</button>
+    <button data-lang="ko">한국어</button>
+  </div>
+</header>
+
+<noscript><div style="padding:24px;font-size:17px;line-height:1.5">
+  <b>이 화면은 미리보기라서 앱이 실행되지 않습니다.</b><br>Safari 또는 Chrome에서 웹 주소(링크)로 열어 주세요.<br><br>
+  <b>Esta es solo una vista previa y la app no puede funcionar aquí.</b><br>Ábrala con su enlace web en Safari o Chrome.
+</div></noscript>
+<div class="layout">
+  <nav id="sidebar"></nav>
+  <div id="scrim"></div>
+  <main id="main"></main>
+</div>
+<div id="actionsSlot"></div>
+<div id="toast"></div>
+
+<script>
+/* =================================================================
+   CONFIG  –  edit here
+   ================================================================= */
+
+// Checklist for a jet / overflow dyeing machine.
+// "id" must be unique and should NOT change once in use (saved data uses it).
+const PARTS_JET = [
+  { id:'pump',      es:'Bomba principal',                 ko:'메인 펌프' },
+  { id:'motor',     es:'Motor y rodamientos',             ko:'모터 및 베어링' },
+  { id:'heatx',     es:'Intercambiador de calor',         ko:'열교환기' },
+  { id:'nozzle',    es:'Boquilla (Jet)',                  ko:'노즐 (제트)' },
+  { id:'reel',      es:'Molinete / Carrete',              ko:'릴 (윈치)' },
+  { id:'door',      es:'Puerta y empaque',                ko:'도어 및 패킹' },
+  { id:'addtank',   es:'Tanque de adición (químicos)',    ko:'약품 투입 탱크' },
+  { id:'valves',    es:'Válvulas (vapor, agua, drenaje)', ko:'밸브 (스팀·급수·배수)' },
+  { id:'pressure',  es:'Manómetro / presión',             ko:'압력계 / 압력' },
+  { id:'temp',      es:'Sensor de temperatura',           ko:'온도 센서' },
+  { id:'level',     es:'Sensor de nivel',                 ko:'수위 센서' },
+  { id:'filter',    es:'Filtro de pelusa',                ko:'린트 필터' },
+  { id:'pipes',     es:'Tuberías y fugas',                ko:'배관 및 누수' },
+  { id:'panel',     es:'Panel de control / controlador',  ko:'제어반 / 컨트롤러' },
+  { id:'safety',    es:'Seguridad (paro de emergencia)',  ko:'안전장치 (비상정지)' },
+  { id:'clean',     es:'Limpieza general',                ko:'전체 청소 상태' },
+];
+
+const CONFIG = {
+  company: 'Willbes Dominicana',
+  emailTo: '',            // e.g. 'boss@company.com,maint@company.com' (used when the share menu is not available)
+  maxPhotosPerPart: 4,
+  photoMaxSize: 1280,     // px, photos are resized to keep the PDF small
+  departments: [
+    {
+      id: 'dyeing',
+      name: { es:'Tintorería (Dyeing Site)', ko:'염색 현장 (Dyeing Site)' },
+      machines: [
+        { id:'A03', name:'A03', type:{ es:'Máquina de teñido Jet', ko:'제트 염색기' }, parts: PARTS_JET },
+      ]
+    },
+    {
+      id: 'finishing',
+      name: { es:'Acabado (Finishing Site)', ko:'가공 현장 (Finishing Site)' },
+      machines: [ /* add Finishing machines here */ ]
+    }
+  ]
+};
+
+/* =================================================================
+   TEXTS (Spanish / Korean)
+   ================================================================= */
+const I18N = {
+  es: {
+    appTitle:'Sistema de Inspección de Máquinas', departments:'Departamentos', noMachines:'Aún no hay máquinas',
+    selectPrompt:'Seleccione un departamento y una máquina para iniciar la inspección.',
+    machinesIn:'Máquinas', partsCount:n=>`${n} puntos de revisión`,
+    inspector:'Inspector', inspectorPh:'Nombre del inspector', date:'Fecha',
+    ok:'OK', problem:'Problema', okCount:'OK', problemCount:'Problemas',
+    parts:'Puntos de revisión', notePh:'Describa brevemente el problema o estado…',
+    addPhoto:'Foto', addInfo:'+ Agregar nota / foto', hasInfo:'nota / fotos',
+    generalNote:'Observaciones generales', generalNotePh:'Comentarios adicionales (opcional)',
+    makePdf:'Generar PDF y enviar', newInspection:'Nueva inspección', generating:'Generando PDF…',
+    pdfReady:'PDF listo', pdfReadyMsg:'Toque "Enviar" y elija su aplicación de correo (Gmail, Outlook…).',
+    send:'Enviar', download:'Descargar', view:'Ver', close:'Cerrar',
+    noShare:'Este dispositivo no permite compartir archivos. "Abrir correo" descarga el PDF: adjúntelo en el correo que se abrirá.',
+    openMail:'Abrir correo',
+    needInspector:'Ingrese el nombre del inspector.',
+    resetTitle:'¿Limpiar el formulario?', resetMsg:'Se borrarán los estados, notas y fotos sin guardar. El historial no se borra.',
+    confirm:'Sí, borrar', cancel:'Cancelar',
+    reportTitle:'Reporte de Inspección de Máquina', company:'Empresa', department:'Departamento',
+    machine:'Máquina', type:'Tipo', result:'Resultado', allOk:'Sin problemas',
+    found:n=>`${n} problema(s) encontrado(s)`, checklist:'Lista de revisión',
+    details:'Detalle de problemas y observaciones', status:'Estado', note:'Nota', item:'Punto',
+    signature:'Firma del inspector', photos:'Fotos',
+    photoLimit:n=>`Máximo ${n} fotos por punto`, photoError:'No se pudo cargar la foto',
+    pdfError:'Error al generar el PDF. Intente de nuevo.',
+    subject:(m,d)=>`Inspección máquina ${m} – ${d}`,
+    body:(m,d,i,n)=>`Reporte de inspección\nMáquina: ${m}\nFecha: ${d}\nInspector: ${i}\nResultado: ${n?n+' problema(s)':'Sin problemas'}\n\nVer PDF adjunto.`,
+    missingNotes:n=>`${n} problema(s) sin descripción.`, continueAnyway:'Continuar', fix:'Revisar',
+    history:'Historial', finish:'Finalizar y guardar', clear:'Limpiar',
+    savedTitle:'Inspección guardada', savedMsg:'Guardada en el historial.', saveError:'No se pudo guardar. Intente de nuevo.',
+    allMachines:'Todas las máquinas', from:'Desde', to:'Hasta', onlyProblems:'Solo con problemas',
+    search:'Buscar (nota, punto, inspector)…', histSummary:(n,b)=>`${n} inspecciones · ${b} con problemas`,
+    noRecords:'No hay inspecciones con estos filtros.', back:'Volver al historial', pdfSend:'PDF / Enviar',
+    del:'Eliminar', delTitle:'¿Eliminar esta inspección?', delMsg:'No se puede deshacer.',
+    exportB:'Exportar respaldo', importB:'Importar respaldo', imported:n=>`${n} registros importados`, importError:'Archivo de respaldo no válido',
+    backupHint:'El historial se guarda en este dispositivo. Exporte un respaldo regularmente y guárdelo en un lugar seguro.',
+    machineHistory:'Ver historial de esta máquina', r30:'30 días', r365:'1 año', rAll:'Todo',
+    saved:'Guardado', locale:'es-DO'
+  },
+  ko: {
+    appTitle:'설비 점검 시스템', departments:'부서', noMachines:'등록된 설비 없음',
+    selectPrompt:'부서와 설비를 선택하여 점검을 시작하세요.',
+    machinesIn:'설비', partsCount:n=>`점검 항목 ${n}개`,
+    inspector:'점검자', inspectorPh:'점검자 이름', date:'일시',
+    ok:'정상', problem:'이상', okCount:'정상', problemCount:'이상',
+    parts:'점검 항목', notePh:'문제 또는 상태를 간단히 입력하세요…',
+    addPhoto:'사진', addInfo:'+ 메모 / 사진 추가', hasInfo:'메모 / 사진',
+    generalNote:'종합 의견', generalNotePh:'추가 의견 (선택)',
+    makePdf:'PDF 생성 및 전송', newInspection:'새 점검', generating:'PDF 생성 중…',
+    pdfReady:'PDF 준비 완료', pdfReadyMsg:'"전송"을 누르고 메일 앱(Gmail, Outlook 등)을 선택하세요.',
+    send:'전송', download:'다운로드', view:'보기', close:'닫기',
+    noShare:'이 기기는 파일 공유를 지원하지 않습니다. "메일 열기"를 누르면 PDF가 다운로드되니 열리는 메일에 첨부하세요.',
+    openMail:'메일 열기',
+    needInspector:'점검자 이름을 입력하세요.',
+    resetTitle:'입력 내용을 지울까요?', resetMsg:'저장하지 않은 상태, 메모, 사진이 삭제됩니다. 이력은 삭제되지 않습니다.',
+    confirm:'예, 삭제', cancel:'취소',
+    reportTitle:'설비 점검 보고서', company:'회사', department:'부서',
+    machine:'설비', type:'종류', result:'결과', allOk:'이상 없음',
+    found:n=>`이상 ${n}건 발견`, checklist:'점검 목록',
+    details:'이상 및 특이사항 상세', status:'상태', note:'메모', item:'항목',
+    signature:'점검자 서명', photos:'사진',
+    photoLimit:n=>`항목당 최대 ${n}장`, photoError:'사진을 불러올 수 없습니다',
+    pdfError:'PDF 생성 오류. 다시 시도하세요.',
+    subject:(m,d)=>`설비 점검 ${m} – ${d}`,
+    body:(m,d,i,n)=>`설비 점검 보고서\n설비: ${m}\n일시: ${d}\n점검자: ${i}\n결과: ${n?'이상 '+n+'건':'이상 없음'}\n\n첨부 PDF를 확인하세요.`,
+    missingNotes:n=>`설명이 없는 이상 항목 ${n}건.`, continueAnyway:'계속', fix:'확인하기',
+    history:'점검 이력', finish:'점검 완료 · 저장', clear:'초기화',
+    savedTitle:'점검 저장 완료', savedMsg:'이력에 저장되었습니다.', saveError:'저장하지 못했습니다. 다시 시도하세요.',
+    allMachines:'전체 설비', from:'시작일', to:'종료일', onlyProblems:'이상 있는 점검만',
+    search:'검색 (메모, 항목, 점검자)…', histSummary:(n,b)=>`점검 ${n}건 · 이상 ${b}건`,
+    noRecords:'조건에 맞는 점검 기록이 없습니다.', back:'이력으로 돌아가기', pdfSend:'PDF / 전송',
+    del:'삭제', delTitle:'이 점검 기록을 삭제할까요?', delMsg:'되돌릴 수 없습니다.',
+    exportB:'백업 내보내기', importB:'백업 가져오기', imported:n=>`${n}건 가져옴`, importError:'올바른 백업 파일이 아닙니다',
+    backupHint:'이력은 이 기기에 저장됩니다. 정기적으로 백업을 내보내 안전한 곳에 보관하세요.',
+    machineHistory:'이 설비의 이력 보기', r30:'30일', r365:'1년', rAll:'전체',
+    saved:'저장됨', locale:'ko-KR'
+  }
+};
+
+/* =================================================================
+   APP CODE  (normally no need to edit below)
+   ================================================================= */
+const state = { lang:'ko', deptId:null, machineId:null, openDepts:{},
+  view:'',            // '' = inspection form, 'history' = list, 'record' = one saved inspection
+  hist:{ machine:'', from:'', to:'', onlyBad:false, q:'' }, recordId:null, record:null };
+const insp = {};   // machineId -> { inspector, startedAt, generalNote, parts:{ partId:{bad,note,photos[],open} } }
+
+const $ = s => document.querySelector(s);
+const t = (k, ...a) => { const v = I18N[state.lang][k]; return typeof v === 'function' ? v(...a) : v; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pname = p => p[state.lang] || p.es;
+const L = obj => (obj && typeof obj === 'object') ? (obj[state.lang] || obj.es) : (obj || '');
+
+function findMachine(id){
+  for (const d of CONFIG.departments) for (const m of d.machines) if (m.id === id) return { dept:d, machine:m };
+  return null;
+}
+
+/* ---------- storage (IndexedDB, falls back to memory only) ---------- */
+const DB = (() => {
+  let p;
+  const STORES = ['kv', 'hist', 'histPhotos'];   // kv = form in progress, hist = saved inspections, histPhotos = their photos
+  const open = () => p || (p = new Promise((res, rej) => {
+    try { const r = indexedDB.open('machine-check', 2);
+      r.onupgradeneeded = () => { for (const st of STORES) if (!r.result.objectStoreNames.contains(st)) r.result.createObjectStore(st); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  }));
+  const tx = async (store, mode, fn) => { const db = await open(); return new Promise((res, rej) => {
+    const s = db.transaction(store, mode).objectStore(store); const q = fn(s);
+    q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
+  return {
+    get: (k, store = 'kv') => tx(store, 'readonly', s => s.get(k)).catch(() => undefined),
+    set: (k, v, store = 'kv') => tx(store, 'readwrite', s => s.put(v, k)).catch(e => console.warn('save failed', e)),
+    put: (k, v, store) => tx(store, 'readwrite', s => s.put(v, k)),          // like set, but reports errors
+    del: (k, store = 'kv') => tx(store, 'readwrite', s => s.delete(k)).catch(() => {}),
+    all: store => tx(store, 'readonly', s => s.getAll()).catch(() => [])
+  };
+})();
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+
+function blankInspection(m){
+  const parts = {};
+  m.parts.forEach(p => parts[p.id] = { bad:false, note:'', photos:[], open:false });
+  return { inspector: lsGet('mc_inspector') || '', startedAt: Date.now(), generalNote:'', parts };
+}
+async function loadInspection(m){
+  if (insp[m.id]) return insp[m.id];
+  const saved = await DB.get('insp_' + m.id);
+  const fresh = blankInspection(m);
+  if (saved) { // merge so new parts added in CONFIG appear automatically
+    Object.assign(fresh, saved, { parts: Object.assign(fresh.parts, saved.parts || {}) });
+  }
+  insp[m.id] = fresh;
+  return fresh;
+}
+const saveTimers = {};
+function save(mid){
+  clearTimeout(saveTimers[mid]);
+  saveTimers[mid] = setTimeout(() => DB.set('insp_' + mid, insp[mid]), 300);
+}
+const problemCount = (m) => { const d = insp[m.id]; if (!d) return 0; return m.parts.filter(p => d.parts[p.id]?.bad).length; };
+
+/* ---------- history (saved inspections) ---------- */
+let histCache = null;
+function makeRecord(dept, m, d, ts){      // snapshot: keeps names so old records stay readable if CONFIG changes later
+  return { id:`${m.id}_${ts}`, ts, machineId:m.id, machine:m.name, type:m.type, deptId:dept.id, dept:dept.name,
+    inspector:d.inspector.trim(), generalNote:d.generalNote,
+    parts:m.parts.map(p => ({ id:p.id, es:p.es, ko:p.ko, bad:!!d.parts[p.id].bad, note:d.parts[p.id].note, photos:[...d.parts[p.id].photos] })) };
+}
+async function saveRecord(rec){
+  const photos = {}; rec.parts.forEach(p => { if (p.photos.length) photos[p.id] = p.photos; });
+  const meta = { ...rec, problems:rec.parts.filter(p => p.bad).length,
+    parts:rec.parts.map(({ photos, ...r }) => ({ ...r, photoCount:photos.length })) };
+  await DB.put(rec.id, photos, 'histPhotos'); await DB.put(rec.id, meta, 'hist'); histCache = null;
+}
+async function loadRecord(id){
+  const meta = await DB.get(id, 'hist'); if (!meta) return null;
+  const photos = (await DB.get(id, 'histPhotos')) || {};
+  return { ...meta, parts:meta.parts.map(p => ({ ...p, photos:photos[p.id] || [] })) };
+}
+async function listHistory(){ if (!histCache) histCache = (await DB.all('hist')).sort((a, b) => b.ts - a.ts); return histCache; }
+async function deleteRecord(id){ await DB.del(id, 'hist'); await DB.del(id, 'histPhotos'); histCache = null; }
+function downloadBlob(blob, name){ const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+async function exportBackup(){
+  const out = []; for (const r of await listHistory()) out.push(await loadRecord(r.id));
+  downloadBlob(new Blob([JSON.stringify({ app:'machine-inspection', version:1, exported:Date.now(), records:out })], { type:'application/json' }),
+    `machine-inspection-backup_${isoStamp(Date.now())}.json`);
+}
+async function importBackup(file){
+  try { const data = JSON.parse(await file.text()); let n = 0;
+    for (const r of data.records || []) { if (!r || !r.id || !Array.isArray(r.parts)) continue;
+      r.parts.forEach(p => p.photos = p.photos || []); await saveRecord(r); n++; }
+    toast(t('imported', n)); renderMain();
+  } catch (e) { console.error(e); toast(t('importError')); }
+}
+const isoDay = ts => { const d = new Date(ts), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; };
+function viewer(src){ const w = document.createElement('div'); w.className = 'viewer'; const im = new Image(); im.src = src; w.appendChild(im); w.onclick = () => w.remove(); document.body.appendChild(w); }
+
+/* ---------- helpers ---------- */
+function toast(msg){ const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2600); }
+function fmtDate(ts, withTime = true){
+  const o = { year:'numeric', month:'2-digit', day:'2-digit' }; if (withTime) Object.assign(o, { hour:'2-digit', minute:'2-digit' });
+  return new Date(ts).toLocaleString(t('locale'), o);
+}
+function isoStamp(ts){ const d = new Date(ts), z = n => String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}`; }
+function modal({ title, msg, buttons }){
+  const bg = document.createElement('div'); bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h4>${esc(title)}</h4><p>${esc(msg)}</p><div class="row"></div></div>`;
+  const row = bg.querySelector('.row');
+  const close = () => bg.remove();
+  buttons.forEach(b => { const el = document.createElement('button'); el.className = 'btn ' + (b.cls || 'ghost'); el.textContent = b.label;
+    el.onclick = async () => { if (b.keepOpen) { await b.onClick?.(); } else { close(); b.onClick?.(); } }; row.appendChild(el); });
+  bg.addEventListener('click', e => { if (e.target === bg) close(); });
+  document.body.appendChild(bg); return close;
+}
+function compressImage(file){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, CONFIG.photoMaxSize / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth*s); c.height = Math.round(img.naturalHeight*s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', 0.75));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('img')); };
+    img.src = url;
+  });
+}
+const ICON = {
+  check:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  x:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  cam:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  chev:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>',
+  hist:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  pdf:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M16 6l-4-4-4 4M12 2v13"/></svg>'
+};
+
+/* ---------- render: sidebar ---------- */
+function renderSidebar(){
+  let h = `<div class="side-title">${esc(t('departments'))}</div>`;
+  for (const d of CONFIG.departments) {
+    const open = !!state.openDepts[d.id];
+    h += `<button class="dept-btn ${!state.view && state.deptId===d.id?'on':''} ${open?'open':''}" data-dept="${esc(d.id)}">
+            <span>${esc(L(d.name))}</span><span class="chev">${ICON.chev}</span></button>`;
+    if (open) {
+      if (!d.machines.length) h += `<div class="empty">${esc(t('noMachines'))}</div>`;
+      else {
+        h += `<ul class="mach-list">`;
+        for (const m of d.machines) {
+          const n = problemCount(m);
+          h += `<li><button class="mach-btn ${!state.view && state.machineId===m.id?'on':''}" data-mach="${esc(m.id)}">
+                  <span class="dot ${n?'bad':''}"></span><span>${esc(m.name)}</span>${n?`<span class="badge">${n}</span>`:''}</button></li>`;
+        }
+        h += `</ul>`;
+      }
+    }
+  }
+  h += `<div class="side-sep"></div><button class="dept-btn ${state.view?'on':''}" data-nav="history">${ICON.hist}<span>${esc(t('history'))}</span></button>`;
+  $('#sidebar').innerHTML = h;
+}
+
+/* ---------- render: main ---------- */
+function renderMain(){
+  const main = $('#main');
+  if (state.view === 'history') { $('#actionsSlot').innerHTML = ''; renderHistory(); return; }
+  if (state.view === 'record')  { $('#actionsSlot').innerHTML = ''; renderRecord(); return; }
+  if (!state.machineId) {
+    const depts = state.deptId ? CONFIG.departments.filter(d => d.id === state.deptId) : CONFIG.departments;
+    let h = `<p class="welcome">${esc(t('selectPrompt'))}</p>`;
+    for (const d of depts) {
+      h += `<h3 class="sec">${esc(L(d.name))}</h3>`;
+      if (!d.machines.length) { h += `<div class="empty">${esc(t('noMachines'))}</div>`; continue; }
+      h += `<div class="grid">` + d.machines.map(m => {
+        const n = problemCount(m);
+        return `<button class="tile" data-mach="${esc(m.id)}"><b>${esc(m.name)}</b><span>${esc(L(m.type))}</span>
+          <span>${esc(t('partsCount', m.parts.length))}${n?` · <b style="color:var(--bad);font-size:14px">${n} ${esc(t('problemCount'))}</b>`:''}</span></button>`;
+      }).join('') + `</div>`;
+    }
+    h += `<h3 class="sec">${esc(t('history'))}</h3><div class="grid"><button class="tile" data-nav="history"><b>${esc(t('history'))}</b><span>${esc(t('search'))}</span></button></div>`;
+    main.innerHTML = h; $('#actionsSlot').innerHTML = ''; return;
+  }
+  const { dept, machine: m } = findMachine(state.machineId);
+  const d = insp[m.id];
+  const bad = problemCount(m);
+  main.innerHTML = `
+    <div class="mhead">
+      <div><div class="sub">${esc(L(dept.name))}</div><h2>${esc(m.name)}</h2><div class="sub">${esc(L(m.type))}</div></div>
+      <div class="chips" id="chips">${chipsHTML(m)}</div>
+    </div>
+    <div class="card meta">
+      <div><label class="fld" for="inspector">${esc(t('inspector'))}</label>
+        <input id="inspector" class="txt" autocomplete="name" placeholder="${esc(t('inspectorPh'))}" value="${esc(d.inspector)}"></div>
+      <div><span class="fld">${esc(t('date'))}</span><div class="ro">${esc(fmtDate(d.startedAt))}</div></div>
+    </div>
+    <button class="link-btn" style="padding:0" data-nav="history" data-m="${esc(m.id)}">${esc(t('machineHistory'))} →</button>
+    <h3 class="sec">${esc(t('parts'))}</h3>
+    <div class="parts">${m.parts.map((p,i) => partHTML(m, p, i)).join('')}</div>
+    <h3 class="sec">${esc(t('generalNote'))}</h3>
+    <textarea id="generalNote" placeholder="${esc(t('generalNotePh'))}">${esc(d.generalNote)}</textarea>`;
+  $('#actionsSlot').innerHTML = `<div class="actions">
+      <button class="btn ghost" id="resetBtn">${esc(t('clear'))}</button>
+      <button class="btn primary" id="finishBtn">${ICON.check}<span>${esc(t('finish'))}</span></button></div>`;
+}
+function chipsHTML(m){
+  const bad = problemCount(m), ok = m.parts.length - bad;
+  return `<span class="chip ok">${ok} ${esc(t('okCount'))}</span><span class="chip bad" ${bad?'':'style="opacity:.45"'}>${bad} ${esc(t('problemCount'))}</span>`;
+}
+function partHTML(m, p, i){
+  const s = insp[m.id].parts[p.id];
+  const showDetails = s.bad || s.open || s.note || s.photos.length;
+  const other = state.lang === 'es' ? p.ko : p.es;
+  return `<div class="part ${s.bad?'bad':''}" data-part="${esc(p.id)}">
+    <div class="prow">
+      <span class="num">${i+1}</span>
+      <div class="pname">${esc(pname(p))}<small>${esc(other)}</small></div>
+      <button class="toggle" role="switch" aria-checked="${s.bad}" aria-label="${esc(pname(p))}">
+        <span class="knob">${s.bad?ICON.x:ICON.check}</span>${esc(s.bad?t('problem'):t('ok'))}</button>
+    </div>
+    ${showDetails ? `<div class="details">
+        <textarea class="note" placeholder="${esc(t('notePh'))}">${esc(s.note)}</textarea>
+        <div class="photos">
+          ${s.photos.map((src,k) => `<div class="thumb"><img src="${src}" data-zoom alt=""><button class="rm" data-rm="${k}" aria-label="remove">×</button></div>`).join('')}
+          ${s.photos.length < CONFIG.maxPhotosPerPart ? `<label class="add-photo">${ICON.cam}<span>${esc(t('addPhoto'))}</span>
+            <input type="file" accept="image/*" multiple></label>` : ''}
+        </div></div>`
+      : `<button class="link-btn addinfo">${esc(t('addInfo'))}</button>`}
+  </div>`;
+}
+function refreshPart(pid){
+  const { machine: m } = findMachine(state.machineId);
+  const idx = m.parts.findIndex(p => p.id === pid);
+  const el = document.querySelector(`.part[data-part="${CSS.escape(pid)}"]`);
+  if (el) el.outerHTML = partHTML(m, m.parts[idx], idx);
+  $('#chips').innerHTML = chipsHTML(m);
+  renderSidebar();
+}
+
+/* ---------- render: history list ---------- */
+function renderHistory(){
+  const h = state.hist, machines = CONFIG.departments.flatMap(d => d.machines);
+  $('#main').innerHTML = `
+    <div class="mhead"><h2>${esc(t('history'))}</h2></div>
+    <div class="card filters">
+      <div><label class="fld" for="hMachine">${esc(t('machine'))}</label>
+        <select id="hMachine" class="txt"><option value="">${esc(t('allMachines'))}</option>
+          ${machines.map(m => `<option value="${esc(m.id)}" ${h.machine===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div>
+      <div><label class="fld" for="hFrom">${esc(t('from'))}</label><input type="date" id="hFrom" class="txt" value="${esc(h.from)}"></div>
+      <div><label class="fld" for="hTo">${esc(t('to'))}</label><input type="date" id="hTo" class="txt" value="${esc(h.to)}"></div>
+      <div class="wide"><input id="hQ" class="txt" type="search" placeholder="${esc(t('search'))}" value="${esc(h.q)}"></div>
+      <div class="wide frow">
+        <label class="chk"><input type="checkbox" id="hOnly" ${h.onlyBad?'checked':''}> ${esc(t('onlyProblems'))}</label>
+        <span class="ranges"><button class="pill" data-range="30">${esc(t('r30'))}</button><button class="pill" data-range="365">${esc(t('r365'))}</button><button class="pill" data-range="0">${esc(t('rAll'))}</button></span>
+      </div>
+    </div>
+    <div id="histList"></div>
+    <div class="card backup"><p>${esc(t('backupHint'))}</p>
+      <button class="btn ghost" id="expBtn">${esc(t('exportB'))}</button>
+      <label class="btn ghost" style="cursor:pointer">${esc(t('importB'))}<input type="file" id="impInput" accept=".json,application/json" hidden></label></div>`;
+  renderHistList();
+}
+async function renderHistList(){
+  const h = state.hist, all = await listHistory(), box = $('#histList'); if (!box) return;
+  const from = h.from ? new Date(h.from + 'T00:00:00').getTime() : -Infinity;
+  const to   = h.to   ? new Date(h.to + 'T23:59:59.999').getTime() : Infinity;
+  const q = h.q.trim().toLowerCase();
+  const rows = all.filter(r => (!h.machine || r.machineId === h.machine) && r.ts >= from && r.ts <= to && (!h.onlyBad || r.problems > 0) &&
+    (!q || [r.machine, r.inspector, r.generalNote, ...r.parts.flatMap(p => p.bad ? [p.es, p.ko, p.note] : [p.note])].join(' ').toLowerCase().includes(q)));
+  const loc = t('locale');
+  box.innerHTML = `<p class="hsum">${esc(t('histSummary', rows.length, rows.filter(r => r.problems).length))}</p>` +
+    (rows.length ? rows.map(r => { const d = new Date(r.ts), badParts = r.parts.filter(p => p.bad);
+      return `<button class="hrow ${r.problems?'bad':''}" data-rec="${esc(r.id)}">
+        <div class="hdate"><b>${esc(d.toLocaleDateString(loc, { year:'numeric', month:'2-digit', day:'2-digit' }))}</b><span>${esc(d.toLocaleTimeString(loc, { hour:'2-digit', minute:'2-digit' }))}</span></div>
+        <div class="hbody"><div><b>${esc(r.machine)}</b> · ${esc(r.inspector)}</div>
+          <div class="hprob">${esc(badParts.length ? badParts.map(pname).join(', ') : t('allOk'))}</div></div>
+        <span class="chip ${r.problems?'bad':'ok'}">${r.problems ? r.problems + ' ' + esc(t('problemCount')) : esc(t('ok'))}</span></button>`; }).join('')
+    : `<div class="empty">${esc(t('noRecords'))}</div>`);
+}
+
+/* ---------- render: one saved inspection (read only) ---------- */
+async function renderRecord(){
+  const rec = await loadRecord(state.recordId);
+  if (!rec) { state.view = 'history'; renderMain(); return; }
+  state.record = rec;
+  const bad = rec.parts.filter(p => p.bad).length;
+  $('#main').innerHTML = `
+    <button class="link-btn" id="recBack" style="padding:0 0 10px">← ${esc(t('back'))}</button>
+    <div class="mhead">
+      <div><div class="sub">${esc(L(rec.dept))}</div><h2>${esc(rec.machine)}</h2><div class="sub">${esc(L(rec.type))}</div></div>
+      <div class="chips"><span class="chip ok">${rec.parts.length - bad} ${esc(t('okCount'))}</span><span class="chip bad" ${bad?'':'style="opacity:.45"'}>${bad} ${esc(t('problemCount'))}</span></div>
+    </div>
+    <div class="card meta">
+      <div><span class="fld">${esc(t('inspector'))}</span><div class="ro">${esc(rec.inspector)}</div></div>
+      <div><span class="fld">${esc(t('date'))}</span><div class="ro">${esc(fmtDate(rec.ts))}</div></div>
+    </div>
+    <h3 class="sec">${esc(t('parts'))}</h3>
+    <div class="parts">${rec.parts.map((p, i) => `<div class="part ${p.bad?'bad':''}">
+      <div class="prow"><span class="num">${i+1}</span>
+        <div class="pname">${esc(pname(p))}<small>${esc(state.lang === 'es' ? p.ko : p.es)}</small></div>
+        <span class="pstat ${p.bad?'bad':'ok'}">${esc(p.bad ? t('problem') : t('ok'))}</span></div>
+      ${p.note || p.photos.length ? `<div class="details">${p.note ? `<div class="rnote">${esc(p.note)}</div>` : ''}
+        ${p.photos.length ? `<div class="photos">${p.photos.map(src => `<div class="thumb"><img src="${src}" data-zoom alt=""></div>`).join('')}</div>` : ''}</div>` : ''}
+    </div>`).join('')}</div>
+    ${rec.generalNote ? `<h3 class="sec">${esc(t('generalNote'))}</h3><div class="card rnote">${esc(rec.generalNote)}</div>` : ''}`;
+  $('#actionsSlot').innerHTML = `<div class="actions">
+      <button class="btn ghost" id="recDel">${esc(t('del'))}</button>
+      <button class="btn primary" id="recPdf">${ICON.pdf}<span>${esc(t('pdfSend'))}</span></button></div>`;
+}
+
+function renderAll(){
+  document.documentElement.lang = state.lang;
+  $('#appTitle').textContent = t('appTitle');
+  document.querySelectorAll('.lang button').forEach(b => b.classList.toggle('on', b.dataset.lang === state.lang));
+  renderSidebar(); renderMain();
+}
+
+/* ---------- navigation ---------- */
+async function selectMachine(id){
+  const f = findMachine(id); if (!f) return;
+  await loadInspection(f.machine);
+  state.view = ''; state.deptId = f.dept.id; state.machineId = id; state.openDepts[f.dept.id] = true;
+  document.body.classList.remove('menu-open');
+  renderAll(); window.scrollTo(0,0);
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click', async e => {
+  const langB = e.target.closest('.lang button');
+  if (langB) { state.lang = langB.dataset.lang; lsSet('mc_lang', state.lang); renderAll(); return; }
+  if (e.target.closest('#menuBtn')) { document.body.classList.toggle('menu-open'); return; }
+  if (e.target.closest('#scrim')) { document.body.classList.remove('menu-open'); return; }
+
+  const zoom = e.target.closest('img[data-zoom]');
+  if (zoom) { viewer(zoom.src); return; }
+  const nav = e.target.closest('[data-nav="history"]');
+  if (nav) { state.view = 'history'; if (nav.dataset.m) state.hist.machine = nav.dataset.m;
+    document.body.classList.remove('menu-open'); renderAll(); window.scrollTo(0,0); return; }
+  const recB = e.target.closest('[data-rec]');
+  if (recB) { state.view = 'record'; state.recordId = recB.dataset.rec; renderAll(); window.scrollTo(0,0); return; }
+  if (e.target.closest('#recBack')) { state.view = 'history'; renderAll(); return; }
+  if (e.target.closest('#recPdf')) { pdfDialog(state.record); return; }
+  if (e.target.closest('#recDel')) { modal({ title:t('delTitle'), msg:t('delMsg'), buttons:[ { label:t('cancel') },
+      { label:t('del'), cls:'danger', onClick: async () => { await deleteRecord(state.recordId); state.view = 'history'; renderAll(); } } ]}); return; }
+  const rg = e.target.closest('[data-range]');
+  if (rg) { const n = +rg.dataset.range; state.hist.to = ''; state.hist.from = n ? isoDay(Date.now() - n*864e5) : ''; renderMain(); return; }
+  if (e.target.closest('#expBtn')) { exportBackup(); return; }
+
+  const deptB = e.target.closest('[data-dept]');
+  if (deptB) { const id = deptB.dataset.dept;
+    if (!state.view && state.deptId === id && !state.machineId) state.openDepts[id] = !state.openDepts[id];
+    else { state.view = ''; state.deptId = id; state.machineId = null; state.openDepts[id] = true; }
+    renderAll(); return; }
+  const machB = e.target.closest('[data-mach]');
+  if (machB) { selectMachine(machB.dataset.mach); return; }
+
+  const part = e.target.closest('.part');
+  if (part && state.machineId && !state.view) {
+    const s = insp[state.machineId].parts[part.dataset.part];
+    if (e.target.closest('.toggle')) { s.bad = !s.bad; save(state.machineId); refreshPart(part.dataset.part);
+      if (s.bad) document.querySelector(`.part[data-part="${CSS.escape(part.dataset.part)}"] .note`)?.focus({ preventScroll:true });
+      return; }
+    if (e.target.closest('.addinfo')) { s.open = true; refreshPart(part.dataset.part); return; }
+    const rm = e.target.closest('[data-rm]');
+    if (rm) { s.photos.splice(+rm.dataset.rm, 1); save(state.machineId); refreshPart(part.dataset.part); return; }
+  }
+  if (e.target.closest('#resetBtn')) { confirmReset(); return; }
+  if (e.target.closest('#finishBtn')) { finishInspection(); return; }
+});
+
+document.addEventListener('input', e => {
+  if (state.view === 'history') { const h = state.hist, el = e.target;
+    if (el.id === 'hMachine') h.machine = el.value; else if (el.id === 'hFrom') h.from = el.value; else if (el.id === 'hTo') h.to = el.value;
+    else if (el.id === 'hQ') h.q = el.value; else if (el.id === 'hOnly') h.onlyBad = el.checked; else return;
+    renderHistList(); return; }
+  if (state.view || !state.machineId) return; const d = insp[state.machineId];
+  if (e.target.id === 'inspector') { d.inspector = e.target.value; e.target.classList.remove('need'); lsSet('mc_inspector', d.inspector); }
+  else if (e.target.id === 'generalNote') d.generalNote = e.target.value;
+  else if (e.target.classList.contains('note')) d.parts[e.target.closest('.part').dataset.part].note = e.target.value;
+  else return;
+  save(state.machineId);
+});
+
+document.addEventListener('change', async e => {
+  if (e.target.id === 'impInput') { if (e.target.files[0]) await importBackup(e.target.files[0]); e.target.value = ''; return; }
+  if (e.target.type !== 'file') return;
+  const part = e.target.closest('.part'); if (!part) return;
+  const mid = state.machineId, pid = part.dataset.part, s = insp[mid].parts[pid];
+  const files = [...e.target.files];
+  for (const f of files) {
+    if (s.photos.length >= CONFIG.maxPhotosPerPart) { toast(t('photoLimit', CONFIG.maxPhotosPerPart)); break; }
+    try { s.photos.push(await compressImage(f)); } catch (err) { toast(t('photoError')); }
+  }
+  save(mid); refreshPart(pid);
+});
+
+function confirmReset(){
+  modal({ title:t('resetTitle'), msg:t('resetMsg'), buttons:[
+    { label:t('cancel') },
+    { label:t('confirm'), cls:'danger', onClick: async () => {
+        const { machine: m } = findMachine(state.machineId);
+        insp[m.id] = blankInspection(m); await DB.del('insp_' + m.id); renderAll(); window.scrollTo(0,0); } }
+  ]});
+}
+
+/* ---------- PDF report ----------
+   The report is drawn on canvas pages (A4) and packed into a PDF by the
+   small writer below. No external library, so it works without internet
+   and supports Spanish and Korean text using the device's own fonts.   */
+function pdfFromJpegs(jpegs){            // jpegs: [{ bytes:Uint8Array, w, h }]
+  const enc = new TextEncoder(), chunks = [], offsets = []; let len = 0;
+  const push = x => { const b = typeof x === 'string' ? enc.encode(x) : x; chunks.push(b); len += b.length; };
+  const obj = (n, body) => { offsets[n] = len; push(`${n} 0 obj\n`); body(); push(`\nendobj\n`); };
+  const n = jpegs.length;
+  push('%PDF-1.4\n');
+  obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => push(`<< /Type /Pages /Count ${n} /Kids [${jpegs.map((_, i) => `${3+3*i} 0 R`).join(' ')}] >>`));
+  jpegs.forEach((j, i) => {
+    const p = 3 + 3*i, c = p + 1, im = p + 2, content = 'q 595.28 0 0 841.89 0 0 cm /Im0 Do Q';
+    obj(p, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${c} 0 R >>`));
+    obj(c, () => push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+    obj(im, () => { push(`<< /Type /XObject /Subtype /Image /Width ${j.w} /Height ${j.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.bytes.length} >>\nstream\n`); push(j.bytes); push('\nendstream'); });
+  });
+  const xref = len, total = 3 + 3*n;
+  push(`xref\n0 ${total}\n0000000000 65535 f \n`);
+  for (let i = 1; i < total; i++) push(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
+  push(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(chunks, { type:'application/pdf' });
+}
+const loadImg = src => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+
+async function buildPdf(rec){
+  const dept = { name:rec.dept }, m = { name:rec.machine, type:rec.type, parts:rec.parts };
+  const d = { inspector:rec.inspector, generalNote:rec.generalNote || '', parts:Object.fromEntries(rec.parts.map(p => [p.id, p])) };
+  const W = 1240, H = 1754, M = 70, CW = W - 2*M;      // A4 at 150 dpi
+  const FONT = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",Arial,sans-serif';
+  const C = { navy:'#1f3a5f', ink:'#1b2430', muted:'#667085', line:'#cfd6e1', soft:'#f2f4f7', ok:'#1e9e5a', bad:'#d93636' };
+  const pages = []; let ctx, y;
+  const newPage = () => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.textBaseline = 'top'; pages.push(cv); y = M; };
+  const need = h => { if (y + h > H - M - 30) { newPage(); return true; } return false; };
+  const font = (px, bold) => { ctx.font = `${bold ? 'bold ' : ''}${px}px ${FONT}`; };
+  const wrap = (text, maxW) => { const out = [];
+    for (const para of String(text ?? '').split('\n')) { let line = '';
+      for (const word of para.split(/(\s+)/)) {
+        if (ctx.measureText(line + word).width <= maxW) { line += word; continue; }
+        if (line.trim() && ctx.measureText(word).width <= maxW) { out.push(line.trimEnd()); line = word.trimStart(); continue; }
+        for (const ch of word) { if (line && ctx.measureText(line + ch).width > maxW) { out.push(line); line = ''; } line += ch; }
+      }
+      out.push(line.trimEnd()); }
+    return out; };
+  const text = (str, x, yy, color = C.ink, align = 'left') => { ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(str, x, yy); ctx.textAlign = 'left'; };
+  const box = (x, yy, w, h, fill) => { if (fill) { ctx.fillStyle = fill; ctx.fillRect(x, yy, w, h); } ctx.strokeStyle = C.line; ctx.lineWidth = 1.5; ctx.strokeRect(x, yy, w, h); };
+  const heading = str => { need(60); font(24, true); text(str, M, y, C.navy); y += 40; };
+
+  const bad = rec.parts.filter(p => p.bad).length;
+  newPage();
+
+  // --- title ---
+  font(36, true); text(t('reportTitle'), M, y, C.navy);
+  font(44, true); text(m.name, W - M, y - 6, C.ink, 'right');
+  font(20); text(CONFIG.company, M, y + 48, C.muted);
+  y += 84; ctx.fillStyle = C.navy; ctx.fillRect(M, y, CW, 4); y += 22;
+
+  // --- info table ---
+  const info = [[t('department'), L(dept.name), t('date'), fmtDate(rec.ts)],
+                [`${t('machine')} / ${t('type')}`, `${m.name} — ${L(m.type)}`, t('inspector'), d.inspector]];
+  const iw = [230, CW - 230 - 170 - 290, 170, 290];
+  for (const row of info) { let x = M; row.forEach((v, k) => { box(x, y, iw[k], 48, k % 2 ? null : C.soft); font(19, k % 2 === 0);
+      text(wrap(v, iw[k] - 20)[0], x + 10, y + 13); x += iw[k]; }); y += 48; }
+  y += 20;
+
+  // --- result banner ---
+  ctx.fillStyle = bad ? C.bad : C.ok; ctx.fillRect(M, y, CW, 60);
+  font(26, true); text(`${t('result')}: ${bad ? t('found', bad) : t('allOk')}`, M + 18, y + 16, '#fff');
+  font(19); text(`${m.parts.length - bad} ${t('okCount')} / ${bad} ${t('problemCount')}`, W - M - 18, y + 20, '#fff', 'right');
+  y += 84;
+
+  // --- checklist table ---
+  heading(t('checklist'));
+  const cw = [50, 380, 140, CW - 570], LH = 26, PAD = 10;
+  const tableHead = () => { let x = M; [ '#', t('item'), t('status'), t('note') ].forEach((v, k) => { box(x, y, cw[k], 42, C.navy); font(19, true);
+      text(v, k === 1 || k === 3 ? x + PAD : x + cw[k]/2, y + 10, '#fff', k === 1 || k === 3 ? 'left' : 'center'); x += cw[k]; }); y += 42; };
+  tableHead();
+  m.parts.forEach((p, i) => { const s = d.parts[p.id];
+    font(19);
+    const nameL = wrap(pname(p), cw[1] - 2*PAD);
+    const noteL = wrap((s.note || '') + (s.photos.length ? `${s.note ? '  ' : ''}(${s.photos.length} ${t('photos')})` : ''), cw[3] - 2*PAD);
+    const h = Math.max(nameL.length, noteL.length, 1) * LH + 2*PAD - 4;
+    if (need(h)) tableHead();
+    let x = M;
+    box(x, y, cw[0], h); font(19); text(String(i + 1), x + cw[0]/2, y + PAD, C.muted, 'center'); x += cw[0];
+    box(x, y, cw[1], h); nameL.forEach((l, k) => text(l, x + PAD, y + PAD + k*LH)); x += cw[1];
+    box(x, y, cw[2], h, s.bad ? C.bad : C.ok); font(19, true); text(s.bad ? t('problem') : t('ok'), x + cw[2]/2, y + (h - 22)/2, '#fff', 'center'); x += cw[2];
+    box(x, y, cw[3], h); font(19); noteL.forEach((l, k) => text(l, x + PAD, y + PAD + k*LH));
+    y += h; });
+  y += 30;
+
+  // --- details with photos ---
+  const detail = m.parts.filter(p => d.parts[p.id].bad || d.parts[p.id].photos.length);
+  if (detail.length) {
+    heading(t('details'));
+    for (const p of detail) { const s = d.parts[p.id], col = s.bad ? C.bad : C.ok;
+      font(20); const noteL = s.note ? wrap(s.note, CW - 30) : [];
+      need(46 + noteL.length * 28 + (s.photos.length ? 420 : 0));
+      ctx.fillStyle = col; ctx.fillRect(M, y, 8, 30);
+      font(22, true); const title = `${m.parts.indexOf(p) + 1}. ${pname(p)}`; text(title, M + 20, y + 2);
+      text(`— ${s.bad ? t('problem') : t('ok')}`, M + 30 + ctx.measureText(title).width, y + 2, col); y += 40;
+      font(20); for (const l of noteL) { need(28); text(l, M + 20, y); y += 28; }
+      if (noteL.length) y += 8;
+      const pw = (CW - 20) / 2, ph = 400;
+      for (let k = 0; k < s.photos.length; k += 2) { need(ph + 16);
+        for (let c = 0; c < 2 && k + c < s.photos.length; c++) {
+          const x = M + c * (pw + 20); box(x, y, pw, ph, C.soft);
+          try { const im = await loadImg(s.photos[k + c]); const r = Math.min(pw / im.naturalWidth, ph / im.naturalHeight);
+            const w = im.naturalWidth * r, h = im.naturalHeight * r; ctx.drawImage(im, x + (pw - w)/2, y + (ph - h)/2, w, h); } catch (e) {}
+        }
+        y += ph + 16; }
+      y += 16; }
+  }
+
+  // --- general note ---
+  if (d.generalNote.trim()) { heading(t('generalNote')); font(20);
+    for (const l of wrap(d.generalNote, CW)) { need(28); text(l, M, y); y += 28; } y += 20; }
+
+  // --- signature ---
+  need(110); y += 60; ctx.strokeStyle = C.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(W - M - 380, y); ctx.lineTo(W - M, y); ctx.stroke();
+  font(18); text(`${t('signature')}: ${d.inspector}`, W - M - 190, y + 8, C.muted, 'center');
+
+  // --- page numbers + convert to JPEG ---
+  const jpegs = [];
+  for (let i = 0; i < pages.length; i++) { const cv = pages[i], c2 = cv.getContext('2d');
+    c2.font = `16px ${FONT}`; c2.fillStyle = C.muted; c2.textBaseline = 'top'; c2.textAlign = 'center';
+    c2.fillText(`${CONFIG.company} · ${m.name} · ${i + 1} / ${pages.length}`, W/2, H - 50);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+    jpegs.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w:W, h:H }); }
+  return pdfFromJpegs(jpegs);
+}
+
+/* ---------- finish: save to history, reset the form, offer the PDF ---------- */
+async function finishInspection(force = false){
+  const { dept, machine: m } = findMachine(state.machineId); const d = insp[m.id];
+  if (!d.inspector.trim()) { const el = $('#inspector'); el.classList.add('need'); el.focus(); toast(t('needInspector')); return; }
+  const missing = m.parts.filter(p => d.parts[p.id].bad && !d.parts[p.id].note.trim()).length;
+  if (missing && !force) {
+    modal({ title:t('missingNotes', missing), msg:t('notePh'), buttons:[
+      { label:t('fix'), onClick:() => { const el = [...document.querySelectorAll('.part.bad .note')].find(x => !x.value.trim()); el?.scrollIntoView({block:'center'}); el?.focus(); } },
+      { label:t('continueAnyway'), cls:'primary', onClick:() => finishInspection(true) } ]});
+    return;
+  }
+  const rec = makeRecord(dept, m, d, Date.now());
+  try { await saveRecord(rec); } catch (e) { console.error(e); toast(t('saveError')); return; }
+  clearTimeout(saveTimers[m.id]); insp[m.id] = blankInspection(m); await DB.del('insp_' + m.id);
+  renderAll(); window.scrollTo(0, 0);
+  pdfDialog(rec, true);
+}
+
+async function pdfDialog(rec, justSaved = false){
+  toast(t('generating'));
+  let blob;
+  try { await new Promise(r => setTimeout(r, 30)); blob = await buildPdf(rec); }
+  catch (err) { console.error(err); toast(t('pdfError')); return; }
+
+  const dateStr = fmtDate(rec.ts, false), bad = rec.parts.filter(p => p.bad).length;
+  const fname = `Inspeccion_${rec.machine}_${isoStamp(rec.ts)}.pdf`.replace(/\s+/g,'_');
+  const file = new File([blob], fname, { type:'application/pdf' });
+  const subject = t('subject', rec.machine, dateStr), body = t('body', rec.machine, dateStr, rec.inspector, bad);
+  const url = URL.createObjectURL(blob);
+  const download = () => { const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove(); };
+  const mailto = () => { location.href = `mailto:${encodeURIComponent(CONFIG.emailTo).replace(/%2C/g,',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; };
+  const canShare = !!(navigator.canShare && navigator.canShare({ files:[file] }));
+
+  // Share needs a fresh tap, so we show a dialog with the "Send" button.
+  modal({ title: justSaved ? t('savedTitle') : t('pdfReady'),
+    msg: (justSaved ? t('savedMsg') + ' ' : '') + (canShare ? t('pdfReadyMsg') : t('noShare')), buttons:[
+    { label:t('view'), keepOpen:true, onClick:() => window.open(url, '_blank') },
+    { label:t('download'), keepOpen:true, onClick:download },
+    canShare
+      ? { label:t('send'), cls:'primary', keepOpen:true, onClick: async () => {
+            try { await navigator.share({ files:[file], title:subject, text:body }); }
+            catch (e) { if (e.name !== 'AbortError') { download(); mailto(); } } } }
+      : { label:t('openMail'), cls:'primary', keepOpen:true, onClick:() => { download(); mailto(); } },
+    { label:t('close') }
+  ]});
+}
+
+/* ---------- start ---------- */
+(async function init(){
+  const l = lsGet('mc_lang'); if (l && I18N[l]) state.lang = l;
+  try { navigator.storage?.persist?.(); } catch (e) {}   // ask the browser not to auto-delete the history
+  for (const d of CONFIG.departments) for (const m of d.machines) await loadInspection(m);
+  // open the first department by default
+  const first = CONFIG.departments[0]; if (first) { state.deptId = first.id; state.openDepts[first.id] = true; }
+  renderAll();
+})();
+</script>
+</body>
+</html>
